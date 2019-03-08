@@ -372,8 +372,10 @@ int main() {
             if(i%1000 == 0) {
                 cout << endl;
                 int rem = 0;
+                system_mass = 0;
                 for(int j = 0; j < n; j++) {
                     if(!particles[j].e) continue;
+                    system_mass += particles[j].mass;
                     rem++;
                     if(particles[j].mass > max_mass) max_mass = particles[j].mass; 
                 }
@@ -382,7 +384,7 @@ int main() {
                 cout << "Real time: \t\t" << float(clock()-t)/(CLOCKS_PER_SEC*60.0) << " minutes" << endl;
                 cout << "Particles remaining: \t" << rem << endl;
                 cout << "Total mass: \t\t" << system_mass*1e18 << " kg" << endl;
-                cout << "Average mass: \t\t" << system_mass/n*1e18 << " kg" << endl;
+                cout << "Average mass: \t\t" << system_mass/rem*1e18 << " kg" << endl;
                 cout << "Largest mass: \t\t" << max_mass*1e18 << " kg" << endl;
                 cout << "Center of mass: \t";
                 for(int j = 0; j < d; j++) cout << int(mr[j]) << "\t";
