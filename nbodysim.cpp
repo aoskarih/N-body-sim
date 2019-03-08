@@ -4,6 +4,8 @@ TODO:
 Only updating changed regions in rendering
 Sort z-axis
 Barnes-Hut algorithm... Maybe in another version
+file inut/output
+
 */
 
 #include <iostream>
