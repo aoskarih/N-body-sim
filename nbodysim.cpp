@@ -30,20 +30,23 @@ time     - 1e3 seconds
 
 //Simulation constants
 const double G = 6.674E-11;             // Gravitational constant real:-11
-const int n = 1000;                      // Number of particles
+const double pi = 3.1416;
+const int n = 1000;                     // Number of particles
 const int d = 3;                        // Number of dimensions
 const double crash = 4;                 // Min distance between particles
-double dt = 10;                          // Time step in time units                     
+double dt = 1;                         // Time step in time units                     
 const double scale = 1;                 // Size of pixel in distance units
-const int mass_scale = 5;               // Masses range 1e(18+s)-1e(20+s)
-const double start_speed = 0.005;       // Multiplier for initial speeds
-const double extermination_zone = 3000; // Place where particles die
-const double pos_dist_dev = 3.0;        // Deviation of particle position distribution
+const int mass_scale = 6;               // Masses range 1e(18+s)-1e(20+s)
+const double start_speed = 0.5;        // Multiplier for initial speeds
+const double extermination_zone = 6000; // Place where particles die
+const double pos_dist_dev_z = 2.0;        // Deviation of particle position distribution
+const double pos_dist_dev_xy = 2.0;        // Deviation of particle position distribution
 const double vel_dist_dev = 5.0;        // Deviation of particle velocity distribution
+const double rotation_bias = 0;       // Rotation in x-y plane
 double system_mass = 0;                 // Total mass of the system
 
-double mr[d];                           // Center of mass
-double vr[d];                           // Velocity of center of mass
+double mr[d] = {};                           // Center of mass
+double vr[d] = {};                           // Velocity of center of mass
 
 const int steps = 0;                    // Limit amount of steps to be taken. 0 = no limit
 const int part_size = 8;                // Size of particles on screen
@@ -58,7 +61,7 @@ const int SCREEN_WIDTH = 1000;
 const int SCREEN_HEIGHT = 1000;
 
 //Log
-bool sim_log = false;
+bool sim_log = true;
 double max_mass = 0;
 double cm_vel = 0;
 
@@ -69,6 +72,17 @@ const int line_res = 20;
 int line_point = 0;
 int line_array[n][line_len][2];
 
+//BH
+const int d2 = 8;           // BH sub nodes
+const int cases[8][3] = {{1,1,1},{1,1,-1},{1,-1,1},{1,-1,-1},
+                        {-1,1,1},{-1,1,-1},{-1,-1,1},{-1,-1,-1}};
+const double theta = 0.5;   // 0 = brute force
+int part_ind = 0;
+const bool BH = false;
+
+/*
+Globals end, code begins
+*/
 
 struct Part {
     double pos [d];
@@ -81,6 +95,12 @@ double force(double m1, double m2, int s) {
     return G*m1*m2/(s*s);
 }
 
+double distance(double p1[d], double p2[d]) {
+    double s = 0;
+    for(int j = 0; j < d; j++) s += (p2[j]-p1[j])*(p2[j]-p1[j]);
+    return sqrt(s);
+}
+
 bool particle_sorter(Part const& p1, Part const& p2) {
     return p1.pos[d-1] < p2.pos[d-1];
 }
@@ -90,36 +110,35 @@ bool init() {
     bool success = true;
     //srand (time(NULL));
     std::default_random_engine generator;
-    std::normal_distribution<double> pos_dist(0, pos_dist_dev);
-    std::normal_distribution<double> vel_dist(0, vel_dist_dev);
+    std::normal_distribution<double> pos_dist_z(0, pos_dist_dev_z);
+    std::normal_distribution<double> pos_dist_xy(0, pos_dist_dev_xy);
+    std::normal_distribution<double> vel1_dist(0, vel_dist_dev);
+    std::normal_distribution<double> vel2_dist(rotation_bias, vel_dist_dev);
     
     //Simulation init
-    for(int i = 0; i < d; i++) {
-        vr[i] = 0;
-        mr[i] = 0;
-    }
-    
     for(int i = 0; i < n; i++) {
         for(int j = 0; j < d; j++) {
-            particles[i].pos[j] = 100*pos_dist(generator)*scale;
-            particles[i].vel[j] = start_speed*(10*vel_dist(generator))/100;
             if(j <= 2) {
+                particles[i].pos[j] = 100*pos_dist_xy(generator)*scale;
                 for(int k = 0; k < line_len; k++) line_array[i][k][j] = particles[i].pos[j];
+            } else {
+                particles[i].pos[j] = 100*pos_dist_z(generator)*scale;
             }
         }
+        
+        double angle = atan2(particles[i].pos[1],particles[i].pos[0]) + pi*0.5;
+        double v1 = start_speed*vel1_dist(generator)/100;
+        double v2 = start_speed*vel2_dist(generator)/100*(1.0/(1.0+2*rotation_bias));
+        
+        particles[i].vel[0] = cos(angle)*v1-sin(angle)*v2;
+        particles[i].vel[1] = sin(angle)*v1+cos(angle)*v2;
+        
+        for(int j = 2; j < d; j++) particles[i].vel[j] = (1.0/(1.0+2*rotation_bias))*start_speed*vel1_dist(generator)/100;
+        
         particles[i].mass = (rand()%100)*pow(10, mass_scale)+10;
         system_mass += particles[i].mass;
     }
-    if(sim_log) {
-        for(Part p : particles) {
-            cout << "[ ";
-            for(int j = 0; j < d; j++) cout << std::fixed << std::setprecision(2) << p.pos[j] << " ";
-            cout << "]\t[ ";
-            for(int j = 0; j < d; j++) cout << std::fixed << std::setprecision(2) << p.vel[j] << " ";
-            cout << "]\t" << p.mass << endl;
-        }
-    }
-    
+
     if(!screen) return success;
     
     //SDL init
@@ -167,16 +186,16 @@ void close() {
     SDL_Quit();
 }
 
+//Regular n^2 update
 void update() {
     
+    // Position update
     for(int i = 0; i < n; i++) {
         
         if(!particles[i].e) continue;
         
         Part p1 = particles[i];
-        double f[d];
-        for(int j = 0; j < d; j++) f[j] = 0;
-        
+        double f[d] = {};        
         for(int k = 0; k < n; k++) {
             if(i==k || !particles[k].e) continue;
             Part p2 = particles[k];
@@ -201,13 +220,14 @@ void update() {
         }
     }
     
+    // Crash check
+    
     for(int i = 0; i < n; i++) {
         
         if(!particles[i].e) continue;
         
         Part p1 = particles[i];
-        for(int k = 0; k < n; k++) {    
-            if(i==k) continue;
+        for(int k = i+1; k < n; k++) {    
             if(!particles[k].e) continue;
             Part p2 = particles[k];
             double s = 0;
@@ -237,6 +257,168 @@ void update() {
                 particles[k].e = false;
             }    
         }
+    }
+}
+
+class Node {
+        Part p;
+        Node * subNodes;
+        bool part = false;
+        bool nodes = false;
+    public:
+        double f[d] = {};
+        double com[d];
+        double mass = 0;
+        double center [d];
+        double side;
+        Node(double c[d], double s);
+        Node() {}
+        void add_particle(Part pa);
+        double* force_on_particle(Part pa);
+};
+
+Node::Node(double c[d], double s) {
+    for(int i = 0; i < d; i++) center[i] = c[i];
+    side=s;
+}
+
+void Node::add_particle(Part pa) {
+    if(!part && !nodes) {
+        cout << "here 3" << endl;
+        p = pa;
+        for(int i = 0; i < d; i++) com[i] = p.pos[i];
+        mass = p.mass;
+        part = true;
+        cout << "here 3.1" << endl;
+    } else if(part && !nodes) {
+        cout << "here 4" << endl;
+        double min_dist_p = 2*side;
+        double min_dist_pa = 2*side;
+        int ind_p;
+        int ind_pa;
+        subNodes = new Node [d2];
+        for(int i = 0; i < d2; i++) {
+            cout << "here 4.0" << endl;
+            for(int j = 0; j < d; j++) subNodes[i].center[j] = center[j]+cases[i][j]*side*0.25;
+            subNodes[i].side = side*0.5;
+//            subNodes[i] = Node(c, side*0.5);
+            cout << "here 4.0." << i << endl;
+            double dist_p = distance(subNodes[i].center, p.pos);
+            double dist_pa = distance(subNodes[i].center, pa.pos);
+            if(dist_p < min_dist_p) {
+                min_dist_p = dist_p;
+                ind_p = i;
+            }
+            if(dist_pa < min_dist_pa) {
+                min_dist_pa = dist_pa;
+                ind_pa = i;
+            }
+        }
+        cout << "here 4.1" << endl;
+        subNodes[ind_pa].add_particle(pa);
+        subNodes[ind_p].add_particle(p);
+        part = false;
+        nodes = true;
+        cout << "here 4.1.0" << endl;
+        for(int i = 0; i < d2; i++) {
+            mass += subNodes[i].mass;
+        }
+        cout << "here 4.1.1" << endl;
+        for(int i = 0; i < d2; i++) {
+            if(subNodes[i].mass == 0) continue;
+            for(int j = 0; j < d; j++) com[j] += subNodes[i].com[j]*subNodes[i].mass/mass;
+        }
+        cout << "here 4.2" << endl;
+    } else if(!part && nodes){
+        cout << "here 5" << endl;
+        double min_dist_pa = side;
+        int ind_pa;
+        for(int i = 0; i < d2; i++) {
+            double c[d];
+            for(int j = 0; j < d; j++) c[j] = subNodes[i].center[j];
+            double dist_pa = distance(c, pa.pos);
+            if(dist_pa < side/4) {
+                ind_pa = i;
+                break;
+            }
+            if(dist_pa < min_dist_pa) {
+                min_dist_pa = dist_pa;
+                ind_pa = i;
+            }
+        }
+        subNodes[ind_pa].add_particle(pa);
+        cout << "here 5.1" << endl;
+    }
+}
+
+double* Node::force_on_particle(Part pa) {
+    cout << "here 6" << endl;
+    for(int i = 0; i < d; i++) f[i] = 0;
+    if(mass == 0) {
+        cout << "here 7: " << f[0] << endl;
+        return f;
+    } else if(part) {
+        cout << "here 8" << endl;
+        double r [d];
+        double s = 0;
+        for(int j = 0; j < d; j++) {
+            r[j] = p.pos[j]-pa.pos[j];
+            s += r[j]*r[j];
+        }
+        s = sqrt(s);
+        if(s == 0) return f;
+        double c = force(pa.mass, p.mass, s);
+        for(int j = 0; j < d; j++) f[j] += c*r[j]/abs(s);
+        cout << "here 8.1: " << c << endl;
+        return f;
+    } else if(side/distance(com, pa.pos) < theta) {
+        cout << "here 9" << endl;
+        double r [d];
+        double s = 0;
+        for(int j = 0; j < d; j++) {
+            r[j] = com[j]-pa.pos[j];
+            s += r[j]*r[j];
+        }
+        s = sqrt(s);
+        double c = force(pa.mass, mass, s);
+        for(int j = 0; j < d; j++) f[j] += c*r[j]/abs(s);
+        cout << "here 9.1: " << c << endl;
+        return f;
+    } else {
+        cout << "here 10" << endl;
+        for(int i = 0; i < d2; i++) {
+            double* fs;
+            fs = subNodes[i].force_on_particle(pa);
+            cout << "here 10.0.1 " << endl;
+            for(int j = 0; j < d; j++) f[j] += *(fs+j);
+        }
+        cout << "here 10.1: " << f[0] << endl;
+        return f;
+    }
+}
+
+//Barnes-Hut nlog(n) update
+void BHupdate() {
+    double c[d] = {};
+    Node top (c, extermination_zone);
+    cout << "here 2" << endl;
+    for(int i = 0; i < n; i++) {
+        top.add_particle(particles[i]);
+    }
+    cout << "here 2.1" << endl;
+    for(int i = 0; i < n; i++) {
+        double f[d] = {};
+        top.force_on_particle(particles[i]);
+        cout << "here 2.2" << endl;
+        for(int j = 0; j < d; j++) f[j] = top.f[j];
+        cout << "here 2.3" << endl;
+        for(int j = 0; j < d; j++) {
+            cout << f[j];
+            double a = f[j]/particles[i].mass;
+            particles[i].vel[j] += dt*a;
+            particles[i].pos[j] += dt*particles[i].vel[j];
+        }
+        cout << endl;
     }
 }
 
@@ -299,8 +481,7 @@ void render(int step) {
             }
         }
     }
-    
-    
+        
     //Particles
     for(Part p : particles) {
         if(!p.e) continue;
@@ -338,8 +519,11 @@ int main() {
         
         int i = 0;
         bool quit = false;
+        bool pause = false;
+        
         while((i<steps || steps == 0) and !quit){
             
+input:
             //input during run
             while(SDL_PollEvent(&e) != 0) {
                 if(e.type == SDL_QUIT) quit = true;
@@ -349,29 +533,36 @@ int main() {
                             quit = true;
                             break;
                         case SDLK_t:
-                            dt++;
+                            dt *= 2;
                             cout << "dt = " << dt << endl;
                             break;
                         case SDLK_g:
-                            if(dt != 0) dt--;
+                            if(dt != 0) dt *= 0.5;
                             cout << "dt = " << dt << endl;
                             break;
                         case SDLK_l:
                             line = !line;
                             break;
+                        case SDLK_p:
+                            pause = !pause;
+                            break;
                     }
                 }
             }
+            if(pause) goto input; 
             
             //update particles
-            update();
+            if(BH && d==3) BHupdate();
+            else update();
             
             //render particles
             if(screen) render(i);
             
             i++;
             sim_t += dt;
-            if(i%1000 == 0) {
+            
+            //Simulation log
+            if(i%1000 == 0 && sim_log) {
                 cout << endl;
                 int rem = 0;
                 system_mass = 0;
@@ -398,16 +589,6 @@ int main() {
                     cout << int(vr[j]/dt*1e5) << "\t";
                 }
                 cout << endl << "Absolute vel of CM: \t" << sqrt(v)/dt*1e2 << " km/s" << endl;
-            }
-            if(sim_log) {
-                cout << endl << i << "\t";
-                for(Part p : particles) {
-                    if(p.e) {
-                        cout << "[ ";
-                        for(int j = 0; j < d; j++) cout << std::fixed << std::setprecision(2) << p.pos[j] << " ";
-                        cout << "] " << p.mass << "\t" << endl;
-                    }
-                }
             }
         }
         t = clock() - t;
