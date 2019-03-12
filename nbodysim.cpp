@@ -34,13 +34,13 @@ const double pi = 3.1416;
 const int n = 1000;                     // Number of particles
 const int d = 3;                        // Number of dimensions
 const double crash = 4;                 // Min distance between particles
-double dt = 1;                         // Time step in time units                     
+double dt = 1;                          // Time step in time units                     
 const double scale = 1;                 // Size of pixel in distance units
-const int mass_scale = 6;               // Masses range 1e(18+s)-1e(20+s)
-const double start_speed = 0.5;        // Multiplier for initial speeds
+const int mass_scale = 5;               // Masses range 1e(18+s)-1e(20+s)
+const double start_speed = 0.2;        // Multiplier for initial speeds
 const double extermination_zone = 6000; // Place where particles die
-const double pos_dist_dev_z = 2.0;        // Deviation of particle position distribution
-const double pos_dist_dev_xy = 2.0;        // Deviation of particle position distribution
+const double pos_dist_dev_z = 1.0;        // Deviation of particle position distribution
+const double pos_dist_dev_xy = 1.0;        // Deviation of particle position distribution
 const double vel_dist_dev = 5.0;        // Deviation of particle velocity distribution
 const double rotation_bias = 0;       // Rotation in x-y plane
 double system_mass = 0;                 // Total mass of the system
@@ -67,7 +67,7 @@ double cm_vel = 0;
 
 //Line properties
 bool line = false;
-const int line_len = 200;
+const int line_len = 100;
 const int line_res = 20;
 int line_point = 0;
 int line_array[n][line_len][2];
@@ -284,25 +284,20 @@ Node::Node(double c[d], double s) {
 
 void Node::add_particle(Part pa) {
     if(!part && !nodes) {
-        cout << "here 3" << endl;
         p = pa;
         for(int i = 0; i < d; i++) com[i] = p.pos[i];
         mass = p.mass;
         part = true;
-        cout << "here 3.1" << endl;
     } else if(part && !nodes) {
-        cout << "here 4" << endl;
         double min_dist_p = 2*side;
         double min_dist_pa = 2*side;
         int ind_p;
         int ind_pa;
         subNodes = new Node [d2];
         for(int i = 0; i < d2; i++) {
-            cout << "here 4.0" << endl;
             for(int j = 0; j < d; j++) subNodes[i].center[j] = center[j]+cases[i][j]*side*0.25;
             subNodes[i].side = side*0.5;
 //            subNodes[i] = Node(c, side*0.5);
-            cout << "here 4.0." << i << endl;
             double dist_p = distance(subNodes[i].center, p.pos);
             double dist_pa = distance(subNodes[i].center, pa.pos);
             if(dist_p < min_dist_p) {
@@ -314,23 +309,18 @@ void Node::add_particle(Part pa) {
                 ind_pa = i;
             }
         }
-        cout << "here 4.1" << endl;
         subNodes[ind_pa].add_particle(pa);
         subNodes[ind_p].add_particle(p);
         part = false;
         nodes = true;
-        cout << "here 4.1.0" << endl;
         for(int i = 0; i < d2; i++) {
             mass += subNodes[i].mass;
         }
-        cout << "here 4.1.1" << endl;
         for(int i = 0; i < d2; i++) {
             if(subNodes[i].mass == 0) continue;
             for(int j = 0; j < d; j++) com[j] += subNodes[i].com[j]*subNodes[i].mass/mass;
         }
-        cout << "here 4.2" << endl;
     } else if(!part && nodes){
-        cout << "here 5" << endl;
         double min_dist_pa = side;
         int ind_pa;
         for(int i = 0; i < d2; i++) {
@@ -347,18 +337,14 @@ void Node::add_particle(Part pa) {
             }
         }
         subNodes[ind_pa].add_particle(pa);
-        cout << "here 5.1" << endl;
     }
 }
 
 double* Node::force_on_particle(Part pa) {
-    cout << "here 6" << endl;
     for(int i = 0; i < d; i++) f[i] = 0;
     if(mass == 0) {
-        cout << "here 7: " << f[0] << endl;
         return f;
     } else if(part) {
-        cout << "here 8" << endl;
         double r [d];
         double s = 0;
         for(int j = 0; j < d; j++) {
@@ -369,10 +355,8 @@ double* Node::force_on_particle(Part pa) {
         if(s == 0) return f;
         double c = force(pa.mass, p.mass, s);
         for(int j = 0; j < d; j++) f[j] += c*r[j]/abs(s);
-        cout << "here 8.1: " << c << endl;
         return f;
     } else if(side/distance(com, pa.pos) < theta) {
-        cout << "here 9" << endl;
         double r [d];
         double s = 0;
         for(int j = 0; j < d; j++) {
@@ -382,17 +366,13 @@ double* Node::force_on_particle(Part pa) {
         s = sqrt(s);
         double c = force(pa.mass, mass, s);
         for(int j = 0; j < d; j++) f[j] += c*r[j]/abs(s);
-        cout << "here 9.1: " << c << endl;
         return f;
     } else {
-        cout << "here 10" << endl;
         for(int i = 0; i < d2; i++) {
             double* fs;
             fs = subNodes[i].force_on_particle(pa);
-            cout << "here 10.0.1 " << endl;
             for(int j = 0; j < d; j++) f[j] += *(fs+j);
         }
-        cout << "here 10.1: " << f[0] << endl;
         return f;
     }
 }
@@ -401,24 +381,56 @@ double* Node::force_on_particle(Part pa) {
 void BHupdate() {
     double c[d] = {};
     Node top (c, extermination_zone);
-    cout << "here 2" << endl;
     for(int i = 0; i < n; i++) {
+        if(!particles[i].e) continue;
         top.add_particle(particles[i]);
     }
-    cout << "here 2.1" << endl;
     for(int i = 0; i < n; i++) {
+        if(!particles[i].e) continue;
         double f[d] = {};
         top.force_on_particle(particles[i]);
-        cout << "here 2.2" << endl;
         for(int j = 0; j < d; j++) f[j] = top.f[j];
-        cout << "here 2.3" << endl;
         for(int j = 0; j < d; j++) {
-            cout << f[j];
             double a = f[j]/particles[i].mass;
             particles[i].vel[j] += dt*a;
             particles[i].pos[j] += dt*particles[i].vel[j];
         }
-        cout << endl;
+    }
+    
+    
+    for(int i = 0; i < n; i++) {
+        if(!particles[i].e) continue;
+        Part p1 = particles[i];
+        for(int k = i+1; k < n; k++) {    
+            if(!particles[k].e) continue;
+            Part p2 = particles[k];
+            double s = 0;
+            for(int j = 0; j < d; j++) s += (p2.pos[j]-p1.pos[j])*(p2.pos[j]-p1.pos[j]);
+            s = sqrt(s);
+            if(s < crash) {
+                double pm1[d];
+                double pm2[d];
+                double tot_m = p1.mass+p2.mass;
+                for(int j = 0; j < d; j++) {
+                    pm1[j] = p1.vel[j]*p1.mass;
+                    pm2[j] = p2.vel[j]*p2.mass;
+                }
+                double vel3[d];
+                double pos3[d];
+                for(int j = 0; j < d; j++) {
+                    vel3[j] = (pm1[j]+pm2[j])/(tot_m);
+                    pos3[j] = (p1.mass*p1.pos[j]+p2.mass*p2.pos[j])/(tot_m);
+                }
+                Part p3;
+                for(int j = 0; j < d; j++) {
+                    p3.pos[j] = pos3[j];
+                    p3.vel[j] = vel3[j];
+                }
+                p3.mass = tot_m;
+                particles[i] = p3;
+                particles[k].e = false;
+            }    
+        }
     }
 }
 
@@ -515,8 +527,10 @@ int main() {
         
         double sim_t = 0;
         clock_t t;
+        clock_t t2;
+        int rt;
         t = clock();
-        
+        t2 = clock();
         int i = 0;
         bool quit = false;
         bool pause = false;
@@ -552,17 +566,23 @@ input:
             if(pause) goto input; 
             
             //update particles
-            if(BH && d==3) BHupdate();
+            if(BH && d==3 && n > 500) BHupdate();
             else update();
             
             //render particles
-            if(screen) render(i);
+            
+            rt += clock()-t2;
+            t2 = clock();
+            if(screen && rt > 14) { 
+                rt = 0;
+                render(i);
+            }
             
             i++;
             sim_t += dt;
             
             //Simulation log
-            if(i%1000 == 0 && sim_log) {
+            if(i%100 == 0 && sim_log) {
                 cout << endl;
                 int rem = 0;
                 system_mass = 0;
