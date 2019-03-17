@@ -12,10 +12,12 @@ file inut/output
 #include <iomanip>
 #include <cmath>
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <ctime>
 #include <algorithm>
 #include <vector>
 #include <random>
+#include <string>
 
 using std::cout;
 using std::cin;
@@ -31,7 +33,7 @@ time     - 1e3 seconds
 //Simulation constants
 const double G = 6.674E-11;             // Gravitational constant real:-11
 const double pi = 3.1416;
-const int n = 500;                     // Number of particles
+const int n = 1500;                     // Number of particles
 const int d = 3;                        // Number of dimensions
 const double crash = 4;                 // Min distance between particles
 double dt = 1;                          // Time step in time units                     
@@ -39,8 +41,8 @@ const double scale = 1;                 // Size of pixel in distance units
 const int mass_scale = 5;               // Masses range 1e(18+s)-1e(20+s)
 const double start_speed = 0.2;        // Multiplier for initial speeds
 const double extermination_zone = 6000; // Place where particles die
-const double pos_dist_dev_z = 1.0;        // Deviation of particle position distribution
-const double pos_dist_dev_xy = 1.0;        // Deviation of particle position distribution
+const double pos_dist_dev_z = 1.5;        // Deviation of particle position distribution
+const double pos_dist_dev_xy = 1.5;        // Deviation of particle position distribution
 const double vel_dist_dev = 5.0;        // Deviation of particle velocity distribution
 const double rotation_bias = 0;       // Rotation in x-y plane
 double system_mass = 0;                 // Total mass of the system
@@ -54,9 +56,10 @@ const int part_size = 8;                // Size of particles on screen
 //SDL stuff
 SDL_Window* gWindow = NULL;
 SDL_Renderer* gRenderer = NULL;
+TTF_Font* sans = NULL;
 
 bool screen = true;
-bool fullscreen = true;
+bool fullscreen = false;
 
 int SCREEN_WIDTH = 1000;
 int SCREEN_HEIGHT = 1000;
@@ -65,6 +68,9 @@ int SCREEN_HEIGHT = 1000;
 bool sim_log = true;
 double max_mass = 0;
 double cm_vel = 0;
+double sim_t = 0;
+double log_t = 0;
+clock_t t;
 
 //Line properties
 bool grid = false;
@@ -114,7 +120,7 @@ double distance(double p1[d], double p2[d]) {
 }
 
 bool particle_sorter(Part const& p1, Part const& p2) {
-    return p1.pos[d-1] < p2.pos[d-1];
+    return p1.mass < p2.mass;
 }
 
 bool init() {
@@ -195,6 +201,11 @@ bool init() {
         
     }
     
+    //SDL TTF init
+    if(TTF_Init() < 0) {
+        cout << "TTF not initializing" << endl;
+    }
+    sans = TTF_OpenFont("noto-sans/NotoSans-Regular.ttf", 14);
     return success;
 }
 
@@ -203,8 +214,10 @@ void close() {
     SDL_DestroyWindow(gWindow);
     gRenderer = NULL;
     gWindow = NULL;
+    TTF_CloseFont(sans);
     
     SDL_Quit();
+    TTF_Quit();
 }
 
 //Regular n^2 update
@@ -483,9 +496,47 @@ void render(int step) {
     }
     
     //Draw
+    //Axis
+    SDL_SetRenderDrawColor(gRenderer, 100, 100, 100, 255);
+    for(int i = 0; i < d; i++) {
+        double line_p1[d] = {};
+        double line_p2[d] = {};
+        line_p1[i] = 1000;
+        line_p2[i] = -1000;
+        
+        // around x
+        double tmp = line_p1[1];
+        line_p1[1] = tmp*cos(anglex)-line_p1[2]*sin(anglex);
+        line_p1[2] = tmp*sin(anglex)+line_p1[2]*cos(anglex);
+        tmp = line_p2[1];
+        line_p2[1] = tmp*cos(anglex)-line_p2[2]*sin(anglex);
+        line_p2[2] = tmp*sin(anglex)+line_p2[2]*cos(anglex);
+        
+        // around y
+        tmp = line_p1[0];
+        line_p1[0] = tmp*cos(angley)+line_p1[2]*sin(angley);
+        line_p1[2] = -tmp*sin(angley)+line_p1[2]*cos(angley);
+        tmp = line_p2[0];
+        line_p2[0] = tmp*cos(angley)+line_p2[2]*sin(angley);
+        line_p2[2] = -tmp*sin(angley)+line_p2[2]*cos(angley);
+        
+        // around z
+        tmp = line_p1[0];
+        line_p1[0] = tmp*cos(anglez)-line_p1[1]*sin(anglez);
+        line_p1[1] = tmp*sin(anglez)+line_p1[1]*cos(anglez);
+        tmp = line_p2[0];
+        line_p2[0] = tmp*cos(anglez)-line_p2[1]*sin(anglez);
+        line_p2[1] = tmp*sin(anglez)+line_p2[1]*cos(anglez);
+        
+        SDL_RenderDrawLine(gRenderer, line_p1[0]+SCREEN_WIDTH/2, 
+                                      line_p1[1]+SCREEN_HEIGHT/2, 
+                                      line_p2[0]+SCREEN_WIDTH/2, 
+                                      line_p2[1]+SCREEN_HEIGHT/2);    
+        
+    }
+    
     //Line
     SDL_SetRenderDrawColor(gRenderer, 100, 100, 150, 255);
-    
     if(line) {
         for(int i = 0; i < n; i++) {
             if(!particles[i].e) continue;
@@ -528,7 +579,7 @@ void render(int step) {
             }
         }
     }
-        
+
     //Particles
     for(Part p : particles) {
         if(!p.e) continue;
@@ -570,7 +621,69 @@ void render(int step) {
                          size};
         SDL_RenderFillRect(gRenderer, &rect);
     }
-    
+
+    //Log
+    if (sim_log) {
+        std::string log_mess[11] = {};
+        std::string log_val[11] = {};
+        static int last_step = 0;
+        int rem = 0;
+        system_mass = 0;
+        for(int j = 0; j < n; j++) {
+            if(!particles[j].e) continue;
+            system_mass += particles[j].mass;
+            rem++;
+            if(particles[j].mass > max_mass) max_mass = particles[j].mass; 
+        }
+        log_mess[0] = "Simlulation steps:   ";
+        log_mess[1] = "Simulation time:     ";
+        log_mess[2] = "Real time:           ";
+        log_mess[3] = "Steps per second:    ";
+        log_mess[4] = "Particles remaining: ";
+        log_mess[5] = "Total mass:          ";
+        log_mess[6] = "Largest mass:        ";
+        log_mess[7] = "Average mass:        ";
+        log_mess[8] = "Avg M (no largest):  ";
+        log_mess[9] = "Time step:           ";
+        log_mess[10] ="View rot angles:     ";
+        
+        log_val[0] = std::to_string(step);
+        log_val[1] = std::to_string(int(sim_t*1000*0.000011574)) + " days";
+        log_val[2] = std::to_string(int(clock()-t)/(CLOCKS_PER_SEC)) + " seconds";
+        log_val[3] = std::to_string(int((step-last_step)/(log_t/CLOCKS_PER_SEC)));
+        last_step = step;
+        log_t = 0;
+        log_val[4] = std::to_string(rem);
+        log_val[5] = std::to_string(long(system_mass)) + " 1e18 kg";
+        log_val[6] = std::to_string(long(max_mass)) + " 1e18 kg";
+        log_val[7] = std::to_string(long(system_mass/rem)) + " 1e18 kg";
+        log_val[8] = std::to_string(long((system_mass-max_mass)/rem)) + " 1e18 kg";
+        log_val[9] = std::to_string(dt) + " 1e3 seconds";
+        log_val[10] = std::to_string(anglex) + " " + std::to_string(angley) + " " + std::to_string(anglez);
+        
+        SDL_Color White = {255, 255, 255};
+        SDL_Color Black = {0, 0, 0};
+        SDL_Surface* mess_surf;
+        SDL_Texture* mess;
+        SDL_Surface* val_surf;
+        SDL_Texture* val;
+        int h = 10;
+        for(int i = 0; i < 11; i++) {
+            mess_surf = TTF_RenderText_Shaded(sans, log_mess[i].c_str(), White, Black); 
+            val_surf = TTF_RenderText_Shaded(sans, log_val[i].c_str(), White, Black); 
+            mess = SDL_CreateTextureFromSurface(gRenderer, mess_surf); 
+            val = SDL_CreateTextureFromSurface(gRenderer, val_surf); 
+            SDL_Rect mess_rect = {10, h, mess_surf->w, mess_surf->h};
+            SDL_Rect val_rect = {150, h, val_surf->w, val_surf->h};
+            h += mess_surf->h;
+            SDL_RenderCopy(gRenderer, mess, NULL, &mess_rect);
+            SDL_RenderCopy(gRenderer, val, NULL, &val_rect);
+        }
+        SDL_FreeSurface(mess_surf);
+        SDL_DestroyTexture(mess);
+        SDL_FreeSurface(val_surf);
+        SDL_DestroyTexture(val);
+    }
     //Update
     SDL_RenderPresent(gRenderer);
 }
@@ -582,9 +695,6 @@ int main() {
         cout << "init success" << endl;
         SDL_Event e;
         
-        double sim_t = 0;
-        double log_t = 0;
-        clock_t t;
         clock_t t2;
         int rt;
         t = clock();
